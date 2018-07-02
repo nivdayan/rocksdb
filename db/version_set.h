@@ -388,6 +388,8 @@ class VersionStorageInfo {
   // Returns an estimate of the amount of live data in bytes.
   uint64_t EstimateLiveDataSize() const;
 
+  uint64_t GetNumentriesAtLevel(int level) const;
+
   uint64_t estimated_compaction_needed_bytes() const {
     return estimated_compaction_needed_bytes_;
   }

@@ -1122,6 +1122,10 @@ struct ReadOptions {
   // Default: 0 (don't filter by seqnum, return user keys)
   SequenceNumber iter_start_seqnum;
 
+  // do not look beyond this spesified number of updates. save I/O by avoiding
+  // probing farther levels
+  long window_size;
+
   ReadOptions();
   ReadOptions(bool cksum, bool cache);
 };

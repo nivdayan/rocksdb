@@ -117,7 +117,8 @@ class FilePicker {
              const Slice& ikey, autovector<LevelFilesBrief>* file_levels,
              unsigned int num_levels, FileIndexer* file_indexer,
              const Comparator* user_comparator,
-             const InternalKeyComparator* internal_comparator)
+             const InternalKeyComparator* internal_comparator,
+             long window_size)
       : num_levels_(num_levels),
         curr_level_(static_cast<unsigned int>(-1)),
         returned_file_level_(static_cast<unsigned int>(-1)),
@@ -134,7 +135,9 @@ class FilePicker {
         ikey_(ikey),
         file_indexer_(file_indexer),
         user_comparator_(user_comparator),
-        internal_comparator_(internal_comparator) {
+        internal_comparator_(internal_comparator),
+        window_counter_(0),
+        window_size_(window_size) {
 #ifdef NDEBUG
     (void)files;
 #endif
@@ -199,6 +202,7 @@ class FilePicker {
           }
           // Key falls out of current file's range
           if (cmp_smallest < 0 || cmp_largest > 0) {
+            window_counter_ += f->file_metadata->num_entries;
             if (curr_level_ == 0) {
               ++curr_index_in_curr_level_;
               continue;
@@ -225,6 +229,9 @@ class FilePicker {
         }
         prev_file_ = f;
 #endif
+        if (window_size_ != -1 && window_counter_ > window_size_) {
+          return nullptr;
+        }
         returned_file_level_ = curr_level_;
         if (curr_level_ > 0 && cmp_largest < 0) {
           // No more files to search in this level.
@@ -232,6 +239,7 @@ class FilePicker {
         } else {
           ++curr_index_in_curr_level_;
         }
+        window_counter_ += f->file_metadata->num_entries;
         return f;
       }
       // Start searching next level.
@@ -270,6 +278,8 @@ class FilePicker {
   FileIndexer* file_indexer_;
   const Comparator* user_comparator_;
   const InternalKeyComparator* internal_comparator_;
+  long window_counter_; // added by Niv to enable sliding windows
+  const long window_size_; // added by Niv to enable sliding windows
 #ifndef NDEBUG
   FdWithKeyRange* prev_file_;
 #endif
@@ -972,9 +982,16 @@ void Version::AddIterators(const ReadOptions& read_options,
                            RangeDelAggregator* range_del_agg) {
   assert(storage_info_.finalized_);
 
+  int window_counter = 0;
   for (int level = 0; level < storage_info_.num_non_empty_levels(); level++) {
-    AddIteratorsForLevel(read_options, soptions, merge_iter_builder, level,
+    if (read_options.window_size != -1 && window_counter < read_options.window_size) {
+      AddIteratorsForLevel(read_options, soptions, merge_iter_builder, level,
                          range_del_agg);
+      window_counter += storage_info_.GetNumentriesAtLevel(level);
+    }
+    else {
+      break;
+    }
   }
 }
 
@@ -1189,7 +1206,7 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
   FilePicker fp(
       storage_info_.files_, user_key, ikey, &storage_info_.level_files_brief_,
       storage_info_.num_non_empty_levels_, &storage_info_.file_indexer_,
-      user_comparator(), internal_comparator());
+      user_comparator(), internal_comparator(), read_options.window_size);
   FdWithKeyRange* f = fp.GetNextFile();
 
   while (f != nullptr) {
@@ -2559,6 +2576,14 @@ uint64_t VersionStorageInfo::EstimateLiveDataSize() const {
     }
   }
   return size;
+}
+
+uint64_t VersionStorageInfo::GetNumentriesAtLevel(int level) const {
+  uint64_t num_entries = 0;
+  for (unsigned int i = 0; i < level_files_brief_[level].num_files; i++) {
+    num_entries += level_files_brief_[level].files[i].file_metadata->num_entries;
+  }
+  return num_entries;
 }
 
 bool VersionStorageInfo::RangeMightExistAfterSortedRun(
